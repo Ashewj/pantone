@@ -18,6 +18,7 @@ MAX_CONCURRENT_REQUESTS = 10
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 CACHE_FILE = "pantone_cache.json"
+_cache = None
 
 def hex_para_rgb(hex_str):
     hex_str = hex_str.lstrip('#')
@@ -32,11 +33,15 @@ def salvar_em_cache(dados):
 
 @lru_cache(maxsize=1)
 def carregar_do_cache():
-    if os.path.exists(CACHE_FILE):
-        print("cache carregado")
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+    global _cache
+    if _cache is None:
+        if os.path.exists(CACHE_FILE):
+            print("cache carregado")
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                _cache = json.load(f)
+        else:
+            _cache = []
+    return _cache
 
 async def buscar(session, url):
     async with semaphore:
@@ -233,7 +238,7 @@ class AbaDeBusca(QWidget):
 
         if not categorias:
             # Exibe um aviso para o usuário caso nenhuma categoria tenha sido selecionada
-            self.show_error_message("Por favor, selecione ao menos uma categoria.")
+            # self.show_error_message("Por favor, selecione ao menos uma categoria.")
             return
 
         self.busca_em_andamento = True
@@ -281,7 +286,7 @@ class AbaDeBusca(QWidget):
 class PantoneFinder(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Pantone Finder")
+        self.setWindowTitle("Pant1")
         self.setGeometry(100, 100, 222, 500)
         pixmap = QPixmap(32, 32)
         pixmap.fill(QColor("#ffb6c1"))
