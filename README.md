@@ -1,5 +1,5 @@
 
-# Pantone Color Finder 🎨
+# Pant1 🎨
 
 A sleek PyQt5-based Pantone color search tool that uses async web scraping to deliver fast and responsive results. Easily search and view color information with a clean interface.
 
