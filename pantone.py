@@ -3,6 +3,7 @@ import os
 import json
 import asyncio
 import aiohttp
+
 from functools import lru_cache
 from bs4 import BeautifulSoup
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
@@ -20,12 +21,18 @@ semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 CACHE_FILE = "pantone_cache.json"
 _cache = None
 
-def hex_para_rgb(hex_str):
-    hex_str = hex_str.lstrip('#')
-    return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
+def hex_para_rgb(hex_code):
+    hex_code = hex_code.lstrip('#')
+    if len(hex_code) != 6:
+        return None  # retorna None se for inválido
+    return tuple(int(hex_code[i:i+2], 16) / 255.0 for i in (0, 2, 4))
 
-def distancia_rgb(cor1, cor2):
-    return sum((a - b) ** 2 for a, b in zip(cor1, cor2)) ** 0.5
+def distancia_rgb(hex1, hex2):
+    rgb1 = hex_para_rgb(hex1)
+    rgb2 = hex_para_rgb(hex2)
+    if not rgb1 or not rgb2:
+        return float('inf')  # cor inválida → distância infinita
+    return sum((a - b) ** 2 for a, b in zip(rgb1, rgb2)) ** 0.5
 
 def salvar_em_cache(dados):
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
@@ -109,16 +116,18 @@ class ThreadDeBusca(QThread):
             baixar_todos_os_dados()
 
         resultados_filtrados = [u for u in carregar_do_cache() if any(s in u['categoria'] for s in self.categorias_selecionadas)]
-       
+
         if self.buscar_por_codigo:
             filtrados = [r for r in resultados_filtrados if self.valor_para_buscar in r['codigo']]
         else:
             try:
-                cor_base = hex_para_rgb(self.valor_para_buscar)
-                filtrados = sorted(
-                    resultados_filtrados,
-                    key=lambda r: distancia_rgb(cor_base, hex_para_rgb(r['hex']))
-                )[:10]
+                match = next((r for r in resultados_filtrados if r['hex'].lower() == self.valor_para_buscar.lower()), None)
+                if match:       
+                   filtrados = [match] 
+                else:
+                    limite_aproximacao = 0.2
+                    resultados_aproximados = [r for r in resultados_filtrados if distancia_rgb(self.valor_para_buscar, r['hex']) <= limite_aproximacao]
+                    filtrados = sorted(resultados_aproximados, key=lambda r: distancia_rgb(self.valor_para_buscar, r['hex'])) #[:10]
             except:
                 filtrados = []
 
@@ -168,7 +177,6 @@ class AbaDeBusca(QWidget):
         layout.addWidget(self.result_widget)
 
         self.list_widget = QListWidget(self)
-        self.list_widget.setFixedWidth(200)
         self.list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list_widget.clicked.connect(self.on_item_click)
         layout.addWidget(self.list_widget)
@@ -183,6 +191,10 @@ class AbaDeBusca(QWidget):
         bottom_layout.addWidget(self.prev_button)
         bottom_layout.addWidget(self.counter_label)
         bottom_layout.addWidget(self.next_button)
+        
+        self.counter_label.setAlignment(Qt.AlignCenter)
+        # self.counter_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
         layout.addLayout(bottom_layout)
 
         self.search_bar.textChanged.connect(self.on_search)
@@ -217,7 +229,13 @@ class AbaDeBusca(QWidget):
 
         detalhes_browser = QTextBrowser(self)
         detalhes_browser.setPlainText(detalhes_texto)
+
+        detalhes_browser.setReadOnly(True)
         detalhes_browser.setOpenExternalLinks(True)
+
+        detalhes_browser.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+        detalhes_browser.viewport().setCursor(Qt.IBeamCursor)
+
         self.result_layout.addWidget(detalhes_browser)
         self.counter_label.setText(f"{index + 1} / {len(self.matches)}")
 
@@ -277,11 +295,16 @@ class AbaDeBusca(QWidget):
         if self.matches:
             self.current_index = (self.current_index + 1) % len(self.matches)
             self.display_result(self.current_index)
+            self.list_widget.setCurrentRow(self.current_index)
+            self.list_widget.scrollToItem(self.list_widget.currentItem())
+
 
     def show_previous(self):
         if self.matches:
             self.current_index = (self.current_index - 1) % len(self.matches)
             self.display_result(self.current_index)
+            self.list_widget.setCurrentRow(self.current_index)
+            self.list_widget.scrollToItem(self.list_widget.currentItem())
 
 class PantoneFinder(QWidget):
     def __init__(self):
@@ -314,9 +337,6 @@ class PantoneFinder(QWidget):
                 color: #888;
                 border: 1px solid #333;
             }
-            QLabel, QTextBrowser {
-                color: #dddddd;
-            }
             QTabBar::tab {
                 background: #2a2a2a;
                 color: white;
@@ -332,6 +352,10 @@ class PantoneFinder(QWidget):
             QTabWidget::pane {
                 border: 1px solid #444;
                 top: -1px;
+            }
+            QListWidget::item:selected {
+                background-color: black;
+                color: white;
             }
         """)
 
