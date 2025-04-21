@@ -246,6 +246,7 @@ class AbaDeBusca(QWidget):
             f"Página: {r['pagina_origem']}")
 
         detalhes_browser = QTextBrowser(self)
+        detalhes_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         detalhes_browser.setPlainText(detalhes_texto)
 
         detalhes_browser.setReadOnly(True)
