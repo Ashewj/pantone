@@ -3,15 +3,16 @@ import os
 import json
 import asyncio
 import aiohttp
+import concurrent.futures
 
 from functools import lru_cache
 from bs4 import BeautifulSoup
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPixmap
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap, QFont
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QHBoxLayout, QFrame, QTextBrowser, QCheckBox,
-    QGroupBox, QTabWidget, QColorDialog
+    QGroupBox, QTabWidget, QColorDialog, QStyledItemDelegate, QStyle
 )
 
 loop = asyncio.new_event_loop()
@@ -93,6 +94,7 @@ async def buscar_pantone_async(_, categorias_selecionadas):
         return [item for sublist in resultados for item in sublist if item]
 
 def baixar_todos_os_dados():
+    print("baixando dados")
     categorias = [
         "fashion-and-interior-designers",
         "industrial-designers",
@@ -116,23 +118,38 @@ class ThreadDeBusca(QThread):
             baixar_todos_os_dados()
 
         resultados_filtrados = [u for u in carregar_do_cache() if any(s in u['categoria'] for s in self.categorias_selecionadas)]
-
+        
         if self.buscar_por_codigo:
-            filtrados = [r for r in resultados_filtrados if self.valor_para_buscar in r['codigo']]
+            match = next((r for r in resultados_filtrados if r['codigo'].lower() == self.valor_para_buscar.lower()), None)
+            if match:       
+                filtrados = [match]
+            else:
+                filtrados = [r for r in resultados_filtrados if self.valor_para_buscar in r['codigo']]
         else:
             try:
                 match = next((r for r in resultados_filtrados if r['hex'].lower() == self.valor_para_buscar.lower()), None)
                 if match:       
                    filtrados = [match] 
                 else:
-                    limite_aproximacao = 0.2
-                    resultados_aproximados = [r for r in resultados_filtrados if distancia_rgb(self.valor_para_buscar, r['hex']) <= limite_aproximacao]
+                    resultados_aproximados = [r for r in resultados_filtrados if distancia_rgb(self.valor_para_buscar, r['hex']) <= 0.035]
                     filtrados = sorted(resultados_aproximados, key=lambda r: distancia_rgb(self.valor_para_buscar, r['hex'])) #[:10]
             except:
                 filtrados = []
 
         self.resultados_prontos.emit(filtrados)
 
+class BlendDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+
+        if option.state & QStyle.State_Selected:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setBrush(QColor(0, 0, 0, 190))  # light white overlay
+            painter.setPen(Qt.NoPen)
+            painter.drawRect(option.rect)
+            painter.restore()
+            
 class AbaDeBusca(QWidget):
     def __init__(self, buscar_por_codigo=True):
         super().__init__()
@@ -151,26 +168,27 @@ class AbaDeBusca(QWidget):
             self.search_bar.setPlaceholderText("Código Pantone (ex: 186 C)")
         else:
             self.search_bar.setPlaceholderText("Código Hex (ex: #FF5733)")
-            conta_gotas_btn = QPushButton("🎨", self)
+            conta_gotas_btn = QPushButton("💧", self)
             conta_gotas_btn.setFixedWidth(30)
             conta_gotas_btn.clicked.connect(self.usar_conta_gotas)
             barra_layout.addWidget(conta_gotas_btn)
 
         barra_layout.addWidget(self.search_bar)
         layout.addLayout(barra_layout)
-
-        self.filter_groupbox = QGroupBox("Filtros de Categoria", self)
-        self.filter_layout = QVBoxLayout(self.filter_groupbox)
+        
         self.graphic_checkbox = QCheckBox("Graphic", self)
-        self.graphic_checkbox.setChecked(True)
         self.fashion_checkbox = QCheckBox("Fashion", self)
         self.industrial_checkbox = QCheckBox("Industrial", self)
-
+        
+        self.graphic_checkbox.setChecked(True)
+ 
+        self.filter_groupbox = QGroupBox("Filtros de Categoria", self)
+        self.filter_layout = QVBoxLayout(self.filter_groupbox)
         self.filter_layout.addWidget(self.graphic_checkbox)
         self.filter_layout.addWidget(self.fashion_checkbox)
         self.filter_layout.addWidget(self.industrial_checkbox)
         layout.addWidget(self.filter_groupbox)
-
+       
         self.result_widget = QFrame(self)
         self.result_layout = QVBoxLayout(self.result_widget)
         self.result_widget.setFixedSize(200, 150)
@@ -178,7 +196,8 @@ class AbaDeBusca(QWidget):
 
         self.list_widget = QListWidget(self)
         self.list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.list_widget.clicked.connect(self.on_item_click)
+        self.list_widget.currentItemChanged.connect(lambda _, __: self.on_item_click())
+        self.list_widget.setItemDelegate(BlendDelegate())
         layout.addWidget(self.list_widget)
 
         self.prev_button = QPushButton("<", self)
@@ -214,10 +233,9 @@ class AbaDeBusca(QWidget):
             return
 
         r = self.matches[index]
-        color = r['hex'].lstrip('#')
         color_box = QLabel(self)
-        color_box.setStyleSheet(f"background-color: #{color}; width: 100px; height: 100px;")
-        color_box.setFixedHeight(50)
+        color_box.setStyleSheet(f"background-color: #{r['hex'].lstrip('#')}")
+        color_box.setMinimumHeight(50)
         self.result_layout.addWidget(color_box)
 
         detalhes_texto = (
@@ -311,9 +329,22 @@ class PantoneFinder(QWidget):
         super().__init__()
         self.setWindowTitle("Pant1")
         self.setGeometry(100, 100, 222, 500)
+        
         pixmap = QPixmap(32, 32)
         pixmap.fill(QColor("#ffb6c1"))
         self.setWindowIcon(QIcon(pixmap))
+
+        """emoji = "🎨"
+        pixmap = QPixmap(64, 64)
+        pixmap.fill(Qt.transparent)
+
+        painter = QPainter(pixmap)
+        font = QFont("Segoe UI Emoji", 40)  # or "Apple Color Emoji" on macOS
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, emoji)
+        painter.end()
+
+        self.setWindowIcon(QIcon(pixmap))"""
 
         self.setStyleSheet("""
             QWidget {
@@ -338,6 +369,15 @@ class PantoneFinder(QWidget):
                 border: 1px solid #333;
             }
             QTabBar::tab {
+                background: #444;
+                color: #6b6b6b;
+                padding: 6px;
+                border: 1px solid #444;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+            QTabBar::tab:selected {
                 background: #2a2a2a;
                 color: white;
                 padding: 6px;
@@ -346,20 +386,12 @@ class PantoneFinder(QWidget):
                 border-top-left-radius: 4px;
                 border-top-right-radius: 4px;
             }
-            QTabBar::tab:selected {
-                background: #444;
-            }
             QTabWidget::pane {
                 border: 1px solid #444;
                 top: -1px;
             }
-            QListWidget::item:selected {
-                background-color: black;
-                color: white;
-            }
         """)
 
-        # Layout principal
         main_layout = QVBoxLayout(self)
 
         self.atualizar_button = QPushButton("Atualizar Dados", self)
