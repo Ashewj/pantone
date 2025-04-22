@@ -25,14 +25,14 @@ _cache = None
 def hex_para_rgb(hex_code):
     hex_code = hex_code.lstrip('#')
     if len(hex_code) != 6:
-        return None  # retorna None se for inválido
+        return None
     return tuple(int(hex_code[i:i+2], 16) / 255.0 for i in (0, 2, 4))
 
 def distancia_rgb(hex1, hex2):
     rgb1 = hex_para_rgb(hex1)
     rgb2 = hex_para_rgb(hex2)
     if not rgb1 or not rgb2:
-        return float('inf')  # cor inválida → distância infinita
+        return float('inf')
     return sum((a - b) ** 2 for a, b in zip(rgb1, rgb2)) ** 0.5
 
 def salvar_em_cache(dados):
@@ -44,7 +44,6 @@ def carregar_do_cache():
     global _cache
     if _cache is None:
         if os.path.exists(CACHE_FILE):
-            print("cache carregado")
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 _cache = json.load(f)
         else:
@@ -74,7 +73,6 @@ async def buscar_pagina(session, url, categoria, pagina):
             })
         return resultados
     except Exception as e:
-        print(f"[Erro ao buscar {url}]: {e}")
         return []
 
 async def buscar_pantone_async(_, categorias_selecionadas):
@@ -94,7 +92,6 @@ async def buscar_pantone_async(_, categorias_selecionadas):
         return [item for sublist in resultados for item in sublist if item]
 
 def baixar_todos_os_dados():
-    print("baixando dados")
     categorias = [
         "fashion-and-interior-designers",
         "industrial-designers",
@@ -132,7 +129,7 @@ class ThreadDeBusca(QThread):
                    filtrados = [match] 
                 else:
                     resultados_aproximados = [r for r in resultados_filtrados if distancia_rgb(self.valor_para_buscar, r['hex']) <= 0.035]
-                    filtrados = sorted(resultados_aproximados, key=lambda r: distancia_rgb(self.valor_para_buscar, r['hex'])) #[:10]
+                    filtrados = sorted(resultados_aproximados, key=lambda r: distancia_rgb(self.valor_para_buscar, r['hex']))
             except:
                 filtrados = []
 
@@ -145,11 +142,11 @@ class BlendDelegate(QStyledItemDelegate):
         if option.state & QStyle.State_Selected:
             painter.save()
             painter.setRenderHint(QPainter.Antialiasing)
-            painter.setBrush(QColor(0, 0, 0, 190))  # light white overlay
+            painter.setBrush(QColor(0, 0, 0, 190))
             painter.setPen(Qt.NoPen)
             painter.drawRect(option.rect)
             painter.restore()
-            
+
 class AbaDeBusca(QWidget):
     def __init__(self, buscar_por_codigo=True):
         super().__init__()
@@ -212,11 +209,13 @@ class AbaDeBusca(QWidget):
         bottom_layout.addWidget(self.next_button)
         
         self.counter_label.setAlignment(Qt.AlignCenter)
-        # self.counter_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         layout.addLayout(bottom_layout)
 
         self.search_bar.textChanged.connect(self.on_search)
+        self.graphic_checkbox.toggled.connect(self.on_checkbox_change)
+        self.fashion_checkbox.toggled.connect(self.on_checkbox_change)
+        self.industrial_checkbox.toggled.connect(self.on_checkbox_change)
 
     def usar_conta_gotas(self):
         cor = QColorDialog.getColor()
@@ -264,7 +263,6 @@ class AbaDeBusca(QWidget):
 
         valor_input = self.search_bar.text().strip().upper()
 
-        # Verifica se há pelo menos uma categoria selecionada
         categorias = []
         if self.graphic_checkbox.isChecked():
             categorias.append("Graphic Designers")
@@ -274,8 +272,6 @@ class AbaDeBusca(QWidget):
             categorias.append("Industrial Designers")
 
         if not categorias:
-            # Exibe um aviso para o usuário caso nenhuma categoria tenha sido selecionada
-            # self.show_error_message("Por favor, selecione ao menos uma categoria.")
             return
 
         self.busca_em_andamento = True
@@ -283,11 +279,8 @@ class AbaDeBusca(QWidget):
         self.search_thread.resultados_prontos.connect(self.on_search_complete)
         self.search_thread.start()
 
-    def show_error_message(self, message):
-        # Exibe uma mensagem de erro se necessário
-        error_label = QLabel(message, self)
-        error_label.setStyleSheet("color: red;")
-        self.result_layout.addWidget(error_label)
+    def on_checkbox_change(self):
+        self.on_search()
 
     def on_search_complete(self, results):
         self.busca_em_andamento = False
@@ -317,7 +310,6 @@ class AbaDeBusca(QWidget):
             self.list_widget.setCurrentRow(self.current_index)
             self.list_widget.scrollToItem(self.list_widget.currentItem())
 
-
     def show_previous(self):
         if self.matches:
             self.current_index = (self.current_index - 1) % len(self.matches)
@@ -334,19 +326,7 @@ class PantoneFinder(QWidget):
         pixmap = QPixmap(32, 32)
         pixmap.fill(QColor("#ffb6c1"))
         self.setWindowIcon(QIcon(pixmap))
-
-        """emoji = "🎨"
-        pixmap = QPixmap(64, 64)
-        pixmap.fill(Qt.transparent)
-
-        painter = QPainter(pixmap)
-        font = QFont("Segoe UI Emoji", 40)  # or "Apple Color Emoji" on macOS
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignCenter, emoji)
-        painter.end()
-
-        self.setWindowIcon(QIcon(pixmap))"""
-
+        
         self.setStyleSheet("""
             QWidget {
                 background-color: #1e1e1e;
@@ -392,23 +372,16 @@ class PantoneFinder(QWidget):
                 top: -1px;
             }
         """)
-
-        main_layout = QVBoxLayout(self)
-
-        self.atualizar_button = QPushButton("Atualizar Dados", self)
-        self.atualizar_button.clicked.connect(self.forcar_atualizacao_cache)
-        main_layout.addWidget(self.atualizar_button)
-
-        tabs = QTabWidget(self)
-        tabs.addTab(AbaDeBusca(buscar_por_codigo=True), "Buscar Código Pantone")
-        tabs.addTab(AbaDeBusca(buscar_por_codigo=False), "Buscar por Hex")
-
-        main_layout.addWidget(tabs)
-
-    def forcar_atualizacao_cache(self):
-        self.atualizar_button.setText("Atualizando dados...")
-        quantidade = baixar_todos_os_dados()
-        self.atualizar_button.setText(f"{quantidade} cores atualizadas com sucesso!")
+        
+        self.tabs = QTabWidget(self)
+        self.tab_codigo = AbaDeBusca(buscar_por_codigo=True)
+        self.tab_hex = AbaDeBusca(buscar_por_codigo=False)
+        self.tabs.addTab(self.tab_codigo, "Busca por Código")
+        self.tabs.addTab(self.tab_hex, "Busca por Hex")
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.tabs)
+        self.setLayout(layout)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
