@@ -3,7 +3,6 @@ import os
 import json
 import asyncio
 import aiohttp
-import concurrent.futures
 
 from functools import lru_cache
 from bs4 import BeautifulSoup
@@ -142,7 +141,7 @@ class BlendDelegate(QStyledItemDelegate):
         if option.state & QStyle.State_Selected:
             painter.save()
             painter.setRenderHint(QPainter.Antialiasing)
-            painter.setBrush(QColor(0, 0, 0, 190))
+            painter.setBrush(QColor(255,255,255,120))
             painter.setPen(Qt.NoPen)
             painter.drawRect(option.rect)
             painter.restore()
@@ -294,13 +293,20 @@ class AbaDeBusca(QWidget):
         self.busca_em_andamento = False
         self.matches = results
 
+        self.list_widget.clear()
+
         if not self.matches:
             return
 
-        self.list_widget.clear()
-        for i, r in enumerate(self.matches):
+        for r in self.matches:
             item = QListWidgetItem(f"{r['codigo']} - {r['hex']}")
-            item.setBackground(QColor(r['hex']))
+            bg_color = QColor(r['hex'])
+            item.setBackground(bg_color)
+
+            brightness = bg_color.red() * 0.299 + bg_color.green() * 0.587 + bg_color.blue() * 0.114
+            text_color = Qt.black if brightness > 186 else Qt.white
+            item.setForeground(QColor(text_color))
+
             self.list_widget.addItem(item)
 
         self.display_result(self.current_index)
