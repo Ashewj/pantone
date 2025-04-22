@@ -272,6 +272,14 @@ class AbaDeBusca(QWidget):
             categorias.append("Industrial Designers")
 
         if not categorias:
+            self.list_widget.clear()
+            self.matches = []
+            self.current_index = 0
+            self.counter_label.setText("")
+            for i in reversed(range(self.result_layout.count())):
+                widget = self.result_layout.itemAt(i).widget()
+                if widget:
+                    widget.deleteLater()
             return
 
         self.busca_em_andamento = True
