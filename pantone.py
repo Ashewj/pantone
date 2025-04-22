@@ -373,16 +373,25 @@ class PantoneFinder(QWidget):
             }
         """)
         
-        self.tabs = QTabWidget(self)
-        self.tab_codigo = AbaDeBusca(buscar_por_codigo=True)
-        self.tab_hex = AbaDeBusca(buscar_por_codigo=False)
-        self.tabs.addTab(self.tab_codigo, "Busca por Código")
-        self.tabs.addTab(self.tab_hex, "Busca por Hex")
-        
         layout = QVBoxLayout(self)
+        
+        self.atualizar_button = QPushButton("Atualizar Dados", self)
+        self.atualizar_button.clicked.connect(self.forcar_atualizacao_cache)
+        layout.addWidget(self.atualizar_button)
+        
+        self.tabs = QTabWidget(self)
+        
+        self.tabs.addTab(AbaDeBusca(buscar_por_codigo=True), "Busca por Código")
+        self.tabs.addTab(AbaDeBusca(buscar_por_codigo=False), "Busca por Hex")
         layout.addWidget(self.tabs)
+        
         self.setLayout(layout)
-
+        
+    def forcar_atualizacao_cache(self):
+        self.atualizar_button.setText("Atualizando dados...")
+        quantidade = baixar_todos_os_dados()
+        self.atualizar_button.setText(f"{quantidade} cores atualizadas com sucesso!")
+         
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = PantoneFinder()
