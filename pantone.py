@@ -4,10 +4,11 @@ import json
 import asyncio
 import aiohttp
 import pandas as pd
-from collections import defaultdict, Counter
 
+from collections import defaultdict, Counter
 from functools import lru_cache
 from bs4 import BeautifulSoup
+
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QAbstractTableModel
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap, QBrush
 from PyQt5.QtWidgets import (
@@ -16,12 +17,15 @@ from PyQt5.QtWidgets import (
     QGroupBox, QTabWidget, QColorDialog, QStyledItemDelegate, QStyle, QTableView
 )
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl.worksheet._reader")
+
 loop = asyncio.new_event_loop()
 MAX_CONCURRENT_REQUESTS = 10
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 CORES_FIXAS = {
-            "PRETO": "PROCESS BLACK C",
+            "PRETO": "PRETO BLACK C",
             "BRANCO": "PROCESS WHITE C",
             "AMARELO": "PROCESS YELLOW C",
             "CYAN": "PROCESS CYAN C",
@@ -49,7 +53,7 @@ class Pantone:
             "pagina_origem": self.pagina_origem
         }
         
-def save_pantone_to_cache(codigo, rgb, hex_value, categoria, pagina_origem, cache_file='pantone_cache.json'):
+def custom_pantone_to_cache(codigo, rgb, hex_value, categoria, pagina_origem, cache_file='pantone_cache.json'):
     pantone = Pantone(codigo, rgb, hex_value, categoria, pagina_origem)
     pantone_dict = pantone.to_dict()
     try:
@@ -139,9 +143,10 @@ def baixar_todos_os_dados():
     resultado = loop.run_until_complete(buscar_pantone_async("", categorias))
     salvar_em_cache(resultado)
     
-    save_pantone_to_cache("PROCESS WHITE C", "rgb(255,255,255)", "#FFFFFF", "Graphic Designers", "Custom")
-    save_pantone_to_cache("4146 C", "rgb(27,29,54)", "#1B1D36", "Graphic Designers", "Custom")
-    
+    custom_pantone_to_cache("PROCESS WHITE C", "rgb(255,255,255)", "#FFFFFF", "Graphic Designers", "Custom")
+    custom_pantone_to_cache("PRETO BLACK C", "rgb(0,0,0)", "#000000", "Graphic Designers", "Custom")
+    custom_pantone_to_cache("4146 C", "rgb(27,29,54)", "#1B1D36", "Graphic Designers", "Custom")
+
     return len(resultado)
 
 class ThreadDeBusca(QThread):
@@ -196,56 +201,49 @@ class PandasModel(QAbstractTableModel):
         self._df = df
         self.cache = {}
         
-    def rowCount(self, parent=None):
+    def rowCount(self, parent=None): # NAO MEXER
         return self._df.shape[0]
 
-    def columnCount(self, parent=None):
+    def columnCount(self, parent=None): # NAO MEXER
         return self._df.shape[1]
-
-    def get_codigo(self, code):
-        codigo = str(code).strip().upper()
-        codigo = CORES_FIXAS.get(codigo, codigo)
-        if codigo.startswith("PANTONE"):
-            codigo = codigo.replace("PANTONE", "").strip() + " C"
-        return codigo
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
             return None
         
         value = self._df.iloc[index.row(), index.column()]
-        headers_cor = [f"CORF{i}" for i in range(1, 9)] + [f"CORV{i}" for i in range(1, 9)]
+        # headers_cor = self.headerData(index.column(), Qt.Horizontal, Qt.DisplayRole) in [f"CORF{i}" for i in range(1, 9)] + [f"CORV{i}" for i in range(1, 9)]
         
         if role == Qt.DisplayRole:
             if pd.isna(value):
                 return ""
             return str(value)
-        elif not pd.isna(value) and self.headerData(index.column(), Qt.Horizontal, Qt.DisplayRole) in headers_cor:
+        else:
+            if pd.isna(value):
+                return None
             
             codigo = self.get_codigo(value)
-
+            
+            if not codigo.endswith(" C"):
+                return None
+        
             if codigo in self.cache:
                 brush = self.cache[codigo]
             else:
                 brush = None
-                for cor in carregar_do_cache():
-                    if codigo == cor['codigo'].strip().upper():
-                        try:
-                            color = QColor(cor['hex'])
-                            brush = QBrush(color)
-                            self.cache[codigo] = brush
-                            break
-                        except:
-                            pass
+                cor = self.get_color_from_pantone(codigo)
+                if cor is not None:
+                    brush = QBrush(QColor(cor))
+                    self.cache[codigo] = brush
 
             if role == Qt.BackgroundRole and brush:
                 return brush
-
+            
             if role == Qt.ForegroundRole and brush:
                 color = brush.color()
                 brightness = color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114
                 return QColor(Qt.black) if brightness > 186 else QColor(Qt.white)
-
+            
         return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
@@ -256,12 +254,44 @@ class PandasModel(QAbstractTableModel):
                 return str(self._df.index[section])
         return None
 
+    def get_codigo(self, code):
+        codigo = str(code).strip().upper()
+        codigo = CORES_FIXAS.get(codigo, codigo)
+
+        if codigo.isdigit() and len(codigo) > 2 and len(codigo) <= 4:
+            return codigo.strip() + " C"
+
+        if codigo.startswith("PANTONE"):
+            return codigo.replace("PANTONE", "").strip() + " C"
+        return codigo
+
     def get_color_from_pantone(self, pantone_code):
-        for cor in carregar_do_cache():
-            if cor['codigo'].strip().upper() == self.get_codigo(pantone_code):
-                return cor['hex']
-        return "#000000"
+        cache_filtrado = [u for u in carregar_do_cache() if u['categoria'] in "Graphic Designers"]
+        match = next((r for r in cache_filtrado if r['codigo'].upper() == self.get_codigo(pantone_code)), None)
+        return match['hex'] if match else None
     
+    def get_filtered_cells(self):
+        col_colors = defaultdict(list)
+
+        for row in range(self.rowCount()):
+            for col in range(self.columnCount()):
+                value = self._df.iloc[row, col]
+                if pd.isna(value):
+                    continue
+                
+                value = str(value).strip().upper()
+
+                if any(color in value for color in CORES_FIXAS) or "PANTONE" in value:
+                    col_colors[col].append((row, value))
+
+        sorted_cells = []
+        for col, values in col_colors.items():
+            for row, codigo in values:
+                hex_color = self.get_color_from_pantone(codigo)
+                hex_color and sorted_cells.append((row, col, self.get_codigo(codigo), hex_color))
+        
+        return sorted_cells
+
 class AbaDeBusca(QWidget):
     def __init__(self, buscar_por_codigo=True, comparar_codigo=False):
         super().__init__()
@@ -276,17 +306,18 @@ class AbaDeBusca(QWidget):
         layout = QVBoxLayout(self)
    
         if self.comparar_codigo:
+
             self.excel_table = QTableView()
-            layout.addWidget(self.excel_table)
+            self.result_table = QTableView()
 
             # df = pd.read_csv("", sep="\t") # clipboard
             # df = pd.read_excel("C:/Users/Administrator/Documents/pantone_t.xlsx") # excel
 
             global _cached_excel_df
             if _cached_excel_df is None:
-                _cached_excel_df = pd.read_excel("C:/Users/Administrator/Downloads/sorted_by_color_similarity.xlsx")
+                _cached_excel_df = pd.read_excel("C:/Users/Administrator/Downloads/cores_ajustadas_separadas.xlsx")
 
-            """   cols = list(_cached_excel_df.columns)
+            """ cols = list(_cached_excel_df.columns)
                 first_col = cols[0]
                 corf_corv_cols = [c for c in cols if c.startswith("CORF") or c.startswith("CORV")]
                 rest_cols = [c for c in cols if c not in [first_col] + corf_corv_cols]
@@ -295,11 +326,13 @@ class AbaDeBusca(QWidget):
             
             model = PandasModel(_cached_excel_df)
 
-            export_button = QPushButton("Exportar Excel Modificado")
-            export_button.clicked.connect(self.exportar_excel)
-            # layout.addWidget(export_button)
-            
+            sorted_cells = model.get_filtered_cells()
+            # print(sorted_cells)
+
+            layout.addWidget(self.excel_table) 
             self.excel_table.setModel(model)
+            #layout.addWidget(self.result_table)
+            #self.result_table.setModel(model)
         else:
             barra_layout = QHBoxLayout()
             self.search_bar = QLineEdit(self)
@@ -360,17 +393,6 @@ class AbaDeBusca(QWidget):
             self.graphic_checkbox.toggled.connect(self.on_checkbox_change)
             self.fashion_checkbox.toggled.connect(self.on_checkbox_change)
             self.industrial_checkbox.toggled.connect(self.on_checkbox_change)
-
-    def exportar_excel(self):
-        if _cached_excel_df is not None:
-            try:
-                output_path = "C:/Users/Administrator/Documents/pantone_t_modified.xlsx"
-                _cached_excel_df.to_excel(output_path, index=False)
-                print(f"Arquivo exportado com sucesso: {output_path}")
-            except Exception as e:
-                print(f"Erro ao salvar o arquivo: {e}")
-        else:
-            print("Nenhum DataFrame carregado para exportar.")
 
     def usar_conta_gotas(self):
         cor = QColorDialog.getColor()
@@ -491,7 +513,7 @@ class PantoneFinder(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Pant1")
-        self.setGeometry(100, 100, 222, 500)
+        self.setGeometry(100, 100, 900, 500)
         
         pixmap = QPixmap(32, 32)
         pixmap.fill(QColor("#ffb6c1"))
