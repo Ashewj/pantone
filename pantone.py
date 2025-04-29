@@ -3,10 +3,15 @@ import os
 import json
 import asyncio
 import aiohttp
+import numpy as np
 import pandas as pd
+import matplotlib.colors as mcolors
 
-from collections import defaultdict, Counter
+from sklearn.cluster import KMeans, DBSCAN, OPTICS
+from collections import defaultdict
+from skimage.color import rgb2lab
 from functools import lru_cache
+from pyciede2000 import ciede2000
 from bs4 import BeautifulSoup
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QAbstractTableModel
@@ -53,7 +58,7 @@ class Pantone:
             "pagina_origem": self.pagina_origem
         }
         
-def custom_pantone_to_cache(codigo, rgb, hex_value, categoria, pagina_origem, cache_file='pantone_cache.json'):
+def custom_pantone_to_cache(codigo, rgb, hex_value, categoria, pagina_origem, cache_file=CACHE_FILE):
     pantone = Pantone(codigo, rgb, hex_value, categoria, pagina_origem)
     pantone_dict = pantone.to_dict()
     try:
@@ -64,19 +69,6 @@ def custom_pantone_to_cache(codigo, rgb, hex_value, categoria, pagina_origem, ca
     cache_data.append(pantone_dict)
     with open(cache_file, 'w') as file:
         json.dump(cache_data, file, indent=4)
-        
-def hex_para_rgb(hex_code):
-    hex_code = hex_code.lstrip('#')
-    if len(hex_code) != 6:
-        return None
-    return tuple(int(hex_code[i:i+2], 16) / 255.0 for i in (0, 2, 4))
-
-def distancia_rgb(hex1, hex2):
-    rgb1 = hex_para_rgb(hex1)
-    rgb2 = hex_para_rgb(hex2)
-    if not rgb1 or not rgb2:
-        return float('inf')
-    return sum((a - b) ** 2 for a, b in zip(rgb1, rgb2)) ** 0.5
 
 def salvar_em_cache(dados):
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
@@ -149,6 +141,15 @@ def baixar_todos_os_dados():
 
     return len(resultado)
 
+def hex_rgb(hex):
+    return np.array(mcolors.hex2color(hex)).tolist()
+
+def hex_lab(hex):
+    return rgb2lab(hex_rgb(hex))
+    
+def ciede2000_delta(lab1, lab2):
+    return ciede2000(lab1, lab2)['delta_E_00']
+
 class ThreadDeBusca(QThread):
     resultados_prontos = pyqtSignal(list)
 
@@ -163,10 +164,10 @@ class ThreadDeBusca(QThread):
             baixar_todos_os_dados()
 
         resultados_filtrados = [u for u in carregar_do_cache() if any(s in u['categoria'] for s in self.categorias_selecionadas)]
-        
+             
         if self.buscar_por_codigo:
             match = next((r for r in resultados_filtrados if r['codigo'].lower() == self.valor_para_buscar.lower()), None)
-            if match:       
+            if match:
                 filtrados = [match]
             else:
                 filtrados = [r for r in resultados_filtrados if self.valor_para_buscar in r['codigo']]
@@ -176,8 +177,10 @@ class ThreadDeBusca(QThread):
                 if match:       
                    filtrados = [match] 
                 else:
-                    resultados_aproximados = [r for r in resultados_filtrados if distancia_rgb(self.valor_para_buscar, r['hex']) <= 0.04]
-                    filtrados = sorted(resultados_aproximados, key=lambda r: distancia_rgb(self.valor_para_buscar, r['hex']))
+                    col_buscar = hex_lab(self.valor_para_buscar)
+
+                    resultados_aproximados = [r for r in resultados_filtrados if ciede2000_delta(col_buscar, hex_lab(r['hex'])) <= 5.5]
+                    filtrados = sorted(resultados_aproximados, key=lambda r: ciede2000_delta(col_buscar, hex_lab(r['hex'])))
             except:
                 filtrados = []
 
@@ -212,7 +215,6 @@ class PandasModel(QAbstractTableModel):
             return None
         
         value = self._df.iloc[index.row(), index.column()]
-        # headers_cor = self.headerData(index.column(), Qt.Horizontal, Qt.DisplayRole) in [f"CORF{i}" for i in range(1, 9)] + [f"CORV{i}" for i in range(1, 9)]
         
         if role == Qt.DisplayRole:
             if pd.isna(value):
@@ -272,17 +274,19 @@ class PandasModel(QAbstractTableModel):
     
     def get_filtered_cells(self):
         col_colors = defaultdict(list)
-
+        
         for row in range(self.rowCount()):
             for col in range(self.columnCount()):
+                
                 value = self._df.iloc[row, col]
                 if pd.isna(value):
                     continue
                 
-                value = str(value).strip().upper()
-
-                if any(color in value for color in CORES_FIXAS) or "PANTONE" in value:
-                    col_colors[col].append((row, value))
+                value = self.get_codigo(str(value).strip().upper())
+                if not value.endswith(" C"):
+                    continue
+                
+                col_colors[col].append((row, value))
 
         sorted_cells = []
         for col, values in col_colors.items():
@@ -295,27 +299,35 @@ class PandasModel(QAbstractTableModel):
 class AbaDeBusca(QWidget):
     def __init__(self, buscar_por_codigo=True, comparar_codigo=False):
         super().__init__()
+        self.layout_ = QVBoxLayout(self)
         self.matches = []
         self.current_index = 0
         self.busca_em_andamento = False
         self.buscar_por_codigo = buscar_por_codigo
         self.comparar_codigo = comparar_codigo
+        self.eps = .2
+        self.min_samples = 2
         self.initUI()
 
     def initUI(self):
-        layout = QVBoxLayout(self)
    
         if self.comparar_codigo:
 
-            self.excel_table = QTableView()
-            self.result_table = QTableView()
-
+            self.eps_input = QLineEdit(self)
+            self.eps_input.setText(str(self.eps))  # Set default value
+    
+            self.min_samples_input = QLineEdit(self)
+            self.min_samples_input.setText(str(self.min_samples))  # Set default value
+    
+            self.layout_.addWidget(self.eps_input)
+            self.layout_.addWidget(self.min_samples_input)
+        
             # df = pd.read_csv("", sep="\t") # clipboard
             # df = pd.read_excel("C:/Users/Administrator/Documents/pantone_t.xlsx") # excel
 
             global _cached_excel_df
             if _cached_excel_df is None:
-                _cached_excel_df = pd.read_excel("C:/Users/Administrator/Downloads/cores_ajustadas_separadas.xlsx")
+                _cached_excel_df = pd.read_excel("C:/Users/Administrator/Downloads/pantone_t.xlsx")
 
             """ cols = list(_cached_excel_df.columns)
                 first_col = cols[0]
@@ -325,14 +337,21 @@ class AbaDeBusca(QWidget):
                 _cached_excel_df = _cached_excel_df[new_order] """   
             
             model = PandasModel(_cached_excel_df)
-
-            sorted_cells = model.get_filtered_cells()
-            # print(sorted_cells)
-
-            layout.addWidget(self.excel_table) 
+            
+            self.excel_table = QTableView()
+            self.layout_.addWidget(self.excel_table) 
             self.excel_table.setModel(model)
-            #layout.addWidget(self.result_table)
-            #self.result_table.setModel(model)
+            
+            sorted_cells = model.get_filtered_cells()
+            sorted_model = PandasModel(self.run_clustering(sorted_cells))
+
+            self.result_table = QTableView()
+            self.layout_.addWidget(self.result_table)
+            self.result_table.setModel(sorted_model)
+            
+            self.eps_input.textChanged.connect(lambda: self.update_clustering(sorted_cells))
+            self.min_samples_input.textChanged.connect(lambda: self.update_clustering(sorted_cells))
+
         else:
             barra_layout = QHBoxLayout()
             self.search_bar = QLineEdit(self)
@@ -348,7 +367,7 @@ class AbaDeBusca(QWidget):
                 barra_layout.addWidget(conta_gotas_btn)
 
             barra_layout.addWidget(self.search_bar)
-            layout.addLayout(barra_layout)
+            self.layout_.addLayout(barra_layout)
         
             self.graphic_checkbox = QCheckBox("Graphic", self)
             self.fashion_checkbox = QCheckBox("Fashion", self)
@@ -361,18 +380,18 @@ class AbaDeBusca(QWidget):
             self.filter_layout.addWidget(self.graphic_checkbox)
             self.filter_layout.addWidget(self.fashion_checkbox)
             self.filter_layout.addWidget(self.industrial_checkbox)
-            layout.addWidget(self.filter_groupbox)
+            self.layout_.addWidget(self.filter_groupbox)
        
             self.result_widget = QFrame(self)
             self.result_layout = QVBoxLayout(self.result_widget)
             self.result_widget.setFixedSize(200, 150)
-            layout.addWidget(self.result_widget)
+            self.layout_.addWidget(self.result_widget)
 
             self.list_widget = QListWidget(self)
             self.list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self.list_widget.currentItemChanged.connect(lambda _, __: self.on_item_click())
             self.list_widget.setItemDelegate(BlendDelegate())
-            layout.addWidget(self.list_widget)
+            self.layout_.addWidget(self.list_widget)
 
             self.prev_button = QPushButton("<", self)
             self.prev_button.clicked.connect(self.show_previous)
@@ -387,13 +406,58 @@ class AbaDeBusca(QWidget):
         
             self.counter_label.setAlignment(Qt.AlignCenter)
 
-            layout.addLayout(bottom_layout)
+            self.layout_.addLayout(bottom_layout)
 
             self.search_bar.textChanged.connect(self.on_search)
             self.graphic_checkbox.toggled.connect(self.on_checkbox_change)
             self.fashion_checkbox.toggled.connect(self.on_checkbox_change)
             self.industrial_checkbox.toggled.connect(self.on_checkbox_change)
 
+    def update_clustering(self, data):
+        try:
+            self.eps = float(self.eps_input.text())
+            self.min_samples = int(self.min_samples_input.text())
+            
+            self.result_table.deleteLater()
+            
+            self.result_table = QTableView()
+            self.layout_.addWidget(self.result_table)
+            self.result_table.setModel(PandasModel(self.run_clustering(data)))
+            
+        except:
+            pass
+    
+    def run_clustering(self, data):
+        hexs = [hex for *_, hex in data]
+        labs = [hex_lab(hex) for hex in hexs]
+        
+        labels = OPTICS(
+            min_samples=self.min_samples,
+            max_eps=self.eps,  # max distance for a point to be considered reachable
+            metric=ciede2000_delta,
+            cluster_method='xi',  # can also use 'dbscan' if you prefer
+            xi=0.05  # small steepness; tweak if you want more/fewer clusters
+            ).fit_predict(labs)
+
+        clusters = defaultdict(list)
+        for (r, c, name, _), lbl in zip(data, labels):
+            clusters[lbl].append((r, c, name))
+            
+        rows = sorted({r for r,_,_,_ in data})
+        sorted_df = pd.DataFrame(index=rows, columns=range(len(clusters)), dtype=object)
+        
+        for cluster_id, items in clusters.items():
+            if cluster_id == -1:
+                print(items)
+            for r, c, name in items:
+                sorted_df.at[r, cluster_id] = name
+                    
+        sorted_df = sorted_df.fillna("")
+        column_names = [f'CORF{i+1}' for i in range(sorted_df.shape[1])]
+        sorted_df.columns = column_names
+
+        return sorted_df
+            
     def usar_conta_gotas(self):
         cor = QColorDialog.getColor()
         if cor.isValid():
